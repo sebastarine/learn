@@ -1,0 +1,232 @@
+Introduction
+A quick primer for those who prefer to use a command line debugger. Both gbd (Linux) and dbx (Unix)
+are very similar. In addition, NuMega technologies produces a very powerful Ring 0 command line
+debugger for Micro$oft Windows named SoftICE (retail $1000). SoftICE has the same 'feel' as gbd and
+dbx. Skills learned in one should quickly port to the others.
+
+
+The Program
+The program used in this document is listed below. It prints the familiar "Hello World" from the nice
+folks at Bell Labs. In addition, we'll snoop around while the target is under gdb to see if we can find any
+goodies.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; compile:
+;;
+;; nasm hello.asm -f elf -o hello.o -g
+;;
+;;    -f: elf file format
+;;    -o: output file name
+;;    -g: debugging information
+;;
+;; gcc hello.o -o hello -g
+;;
+;;    -o: output file name
+;;    -g: debugging information
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GLOBAL main
+
+EXTERN printf
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; defines
+;;
+
+LF             equ    0xA          ;; 10 decimal
+CR             equ    0xD          ;; 13 decimal
+TERM           equ      0          ;; NULL
+
+SYSTEM_EXIT equ         1          ;; exit to OS
+SYSTEM_SVC equ       0x80          ;; int 80h
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; global read/write data
+;;
+
+SECTION .data
+szHello     db 'Hello World', LF, CR, TERM
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; code
+;;
+
+SECTION .text
+
+  main:
+
+    push dword szHello          ;; push address of szHello
+    call printf                 ;; call c runtime
+    add esp, 4                  ;; adjust stack
+
+    mov   eax, SYSTEM_EXIT      ;; prepare for exit
+    int   SYSTEM_SVC            ;; good bye
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+
+Compile the Program
+Compile and run the program as shown below.
+
+
+
+
+Works as expected.
+Lets see what's going on under the hood…
+
+Fire up gdb. Execute 'gdb hello' as shown below:
+
+
+
+
+At this point, gdb has our program loaded. Time to look at help:
+
+
+
+
+The 'classes' of interest will be breakpoints, data, and stack.
+To spare you the reading, here are some of the more useful commands:
+
+Function             Meaning
+break 'function'     Sets a break point at entry to 'function'
+delete               Deletes all break points
+delete n             Deletes break point n
+disassemble          Disassemble a specified section of memory.
+                     Default is the function surrounding the pc of the selected frame.
+                     With a single argument, the function surrounding that address is dumped.
+                     Two arguments are taken as a range of memory to dump.
+print                Print value of expression EXP.
+                     Variables accessible are those of the lexical environment of the selected stack
+                     frame, plus all those whose scope is global or an entire file.
+run                  Start debugged program. You may specify arguments to give it. Args may
+                     include "*", or "[...]"; they are expanded using "sh". Input and output redirection
+                     with ">", "<", or ">>" are also allowed.
+                     With no arguments, uses arguments last specified (with "run" or "set args"). To
+                     cancel previous arguments and run with no arguments, use "set args" without
+                     arguments.
+next                 step into a function (see also 'help next' for a complete explanation)
+step                 step into a function (see also 'help step' for a complete explanation)
+continue             continue execution
+where                print the call stack (where you are in the program)
+quit                 exit gdb
+info                 info address -- Describe where symbol SYM is stored
+                     info all-registers -- List of all registers and their contents
+                     info args -- Argument variables of current stack frame
+                     info breakpoints -- Status of user-settable breakpoints
+                     info display -- Expressions to display when program stops
+                     info float -- Print the status of the floating point unit
+                     info frame -- All about selected stack frame
+                     info functions -- All function names
+                     info handle -- What debugger does when program gets various signals
+                     info line -- Core addresses of the code for a source line
+                     info locals -- Local variables of current stack frame
+                     info program -- Execution status of the program
+                     info registers -- List of integer registers and their contents
+                     info scope -- List the variables local to a scope
+                     info set -- Show all GDB settings
+                     info signals -- What debugger does when program gets various signals
+                     info source -- Information about the current source file
+                     info stack -- Backtrace of the stack
+                     info symbol -- Describe what symbol is at location ADDR
+                     info tracepoints -- Status of tracepoints
+                     info types -- All type names
+                     info variables -- All global and static variable names
+                     info watchpoints -- Synonym for "info breakpoints"
+First thing is first. gdb's default assembly is AT&T (used by GAS, the GNU Assembler). Since we
+write with Intel assembly, we'll set that:
+
+
+
+
+Set a break point in main and printf, shown below:
+
+
+
+
+Breakpoint 1 is at memory address 0x80483d0, and 2 is at 0x8048308. To delete these break points, we
+could now issue 'delete' to remove all, 'delete 1' or 'delete 2' to remove a specific break point.
+Finally, run the program. We'll run the program with an argument to see if we can find it later. Issue
+'run argument':
+
+
+
+
+Not much here. Now would be a good time to issue 'disassemble':
+
+
+
+
+Seems we've lost much of our debug information. This is due to nasm. nasm has not left us much, but
+its enough we can work with.
+We know we passed a command line argument to the program. We'll try to find it. The stack should
+look similar to below:
+
+                                 esp + C      char* env[]    pointer
+                                 esp + 8      char* argv[]   pointer
+                                 esp + 4          argc       integer
+                                  esp            ???        unknown
+
+gdb and dbx have very powerful expression evaluators. We'll dig for argc. It should be 2:
+
+
+
+
+It seems we found argc at esp + 4. Here's what we did:
+     • When printing a register, prefix the register name with a '$'
+     • esp + 4 is an address. This required a dereference '*'
+     • The argument was an integer. Cast it as such 'int'
+
+So, the final expression was *(int)($esp+4)
+Easy enough. Lets poke around and find the program name:
+
+
+
+
+This was a little tougher. Basically, argv[] is a char**. At esp + 8, we found a pointer to the char**.
+So, we needed to double dereference to get the char* (argv[0]). argv[1] will be found similarly with an
+expression such as 'print *( * (char*) ( (char**)($esp+8) + 4)'. Basically, you will add 4 (bump the
+pointer) before the final dereference
+
+Another way to find argv[] is to issue 'backtrace' while in main:
+argv[0] is at 0xbffffbb4. argv[1] will be at 0xbffffbb8:
+
+
+
+
+Enough fooling around with argc and argv[]. Set a breakpoint to stop after the call to printf . Issue
+'break *0x80483da' (substitute the address as required).
+Issue 'continue' to start execution. We hit the second break point in printf. Another useful commands at
+this point is 'where' to get our call stack. We also get our format string since we are in printf.
+
+
+
+
+Continue once again, and we break at address 0x80483da. We just returned from printf.
+Issue 'info registers' to see what's in the registers:
+
+
+
+
+Its interesting to see what is in eax and ecx. Could this be the CR (carriage return) that ended our string?
+We have not cleaned the stack yet. esp should point to the string we just printed. Issue
+'print *(char**)($esp)':
+Other useful commands (that don't work due to nasm's lack of debug information) are 'next', 'step',
+'xbreak', and 'whatis' which gives you type information. Also, note that you must use an '*' to specify a
+break on an address:
+
+
+
+
+And finally, issue 'quit' to exit the program:
+
+
+
+
+Also note that you can code an 'int 3' directly in your source if you want to stop while under the
+debugger. This way, you don't have to place a breakpoint on the command line.
+
